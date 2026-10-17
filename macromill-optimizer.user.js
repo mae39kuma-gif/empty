@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         マクロミル 回答ボタン最適化
 // @namespace    https://github.com/mae39kuma-gif/makuromiru-saitekika
-// @version      1.2.0
+// @version      1.3.0
 // @description  マクロミルのアンケート回答画面で、選択肢と「次へ」ボタンを押しやすくする（PC・スマホ対応）
 // @match        *://*.macromill.com/*
 // @run-at       document-idle
@@ -73,24 +73,38 @@
     }
     #mmopt-toast.mmopt-show { opacity: 1; }
 
-    /* 選択肢が多い単一回答をプルダウンにしたもの */
-    .mmopt-select-wrap { display: block; padding: 10px 12px; list-style: none; }
-    .mmopt-select {
-      display: block; width: 100%; max-width: 560px;
-      min-height: 52px; padding: 10px 40px 10px 14px;
-      font-size: 18px !important; color: #222; background: #fff;
-      border: 2px solid #b8b8b8; border-radius: 10px;
-      -webkit-appearance: none; appearance: none;
-      background-image: linear-gradient(45deg, transparent 50%, #e8590c 50%), linear-gradient(135deg, #e8590c 50%, transparent 50%);
-      background-position: calc(100% - 22px) 50%, calc(100% - 15px) 50%;
-      background-size: 7px 7px; background-repeat: no-repeat;
+    /* 選択肢が多い単一回答は、本物の選択肢を2列に詰めて並べる（タップは本物のまま） */
+    .mmopt-compact {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px !important;
+      padding: 8px !important;
+      list-style: none !important;
     }
-    .mmopt-select.mmopt-chosen { border-color: #e8590c; background-color: #fff4ee; font-weight: bold; }
-    .mmopt-select-back {
-      display: inline-block; margin-top: 6px; padding: 4px 2px;
-      font-size: 13px; color: #666; text-decoration: underline; background: none; border: none; cursor: pointer;
+    .mmopt-compact > .mmopt-citem {
+      position: relative;
+      display: flex !important;
+      align-items: center;
+      min-height: 46px;
+      margin: 0 !important;
+      padding: 6px 8px !important;
+      border: 1px solid #c9c9c9 !important;
+      border-radius: 8px !important;
+      box-sizing: border-box;
+      font-size: 15px !important;
+      line-height: 1.3 !important;
+      cursor: pointer;
     }
-    .mmopt-hidden { display: none !important; }
+    .mmopt-compact > .mmopt-citem * {
+      margin-top: 0 !important; margin-bottom: 0 !important;
+      padding-top: 0 !important; padding-bottom: 0 !important;
+      min-height: 0 !important; line-height: 1.3 !important;
+    }
+    .mmopt-compact > .mmopt-citem.mmopt-cchecked {
+      border: 2px solid #e8590c !important;
+      background-color: #fff1e8 !important;
+      font-weight: bold;
+    }
     .mmopt-cell:hover { background-color: rgba(232, 89, 12, 0.08) !important; }
     .mmopt-cell.mmopt-checked { background-color: rgba(232, 89, 12, 0.18) !important; }
 
@@ -169,13 +183,9 @@
     return !!row && row.querySelectorAll('input[type="radio"], input[type="checkbox"]').length >= 5;
   }
 
-  // ---------- 選択肢が多い単一回答をプルダウンにする ----------
-  const SELECT_MIN = 6; // この数以上の選択肢があればプルダウンにする
-
-  function optionText(input, item) {
-    const lab = (input.labels && input.labels[0]) || item;
-    return (lab.textContent || '').replace(/\s+/g, ' ').trim() || input.value;
-  }
+  // ---------- 選択肢が多い単一回答をコンパクトに並べる ----------
+  // 選択肢そのものは本物のまま（並べ方だけ変える）なので、サイト側の「回答済み」判定に影響しない
+  const COMPACT_MIN = 6; // この数以上の選択肢があれば2列にする
 
   // 入力欄から上にたどり、同じ質問の他の選択肢を含まない一番外側の要素（＝1つの選択肢の行）
   function optionItem(input, sameName) {
@@ -187,78 +197,42 @@
     return el;
   }
 
-  function convertToSelects() {
+  function compactLongLists() {
     const groups = new Map();
     document.querySelectorAll('input[type="radio"]').forEach((r) => {
-      if (!r.name || r.__mmoptSel) return;
-      const key = (r.form ? 'f' : '') + r.name;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(r);
+      if (!r.name) return;
+      if (!groups.has(r.name)) groups.set(r.name, []);
+      groups.get(r.name).push(r);
     });
 
     groups.forEach((radios) => {
-      if (radios.length < SELECT_MIN) return;
+      if (radios.length < COMPACT_MIN) return;
       if (radios.some((r) => isDense(r))) return; // マトリクス表はそのまま
       const items = radios.map((r) => optionItem(r, radios));
+      const parent = items[0].parentElement;
+      // 全選択肢が同じ親の直下に並んでいる場合だけ（それ以外は崩れる恐れがあるので触らない）
+      if (!parent || items.some((it) => it.parentElement !== parent)) return;
+      if (/^(TBODY|TABLE|THEAD|TR)$/.test(parent.tagName)) return;
       // 「その他（　　）」のような記入欄がある質問はそのまま
       if (items.some((it) => it.querySelector('input[type="text"], textarea'))) return;
-      if (items.some((it) => it === document.documentElement)) return;
 
-      radios.forEach((r) => { r.__mmoptSel = true; });
-
-      const select = document.createElement('select');
-      select.className = 'mmopt-select';
-      select.setAttribute('aria-label', '選択肢');
-      const ph = document.createElement('option');
-      ph.value = '';
-      ph.textContent = '▼ タップして選ぶ';
-      select.appendChild(ph);
-      radios.forEach((r, i) => {
-        const o = document.createElement('option');
-        o.value = String(i);
-        o.textContent = optionText(r, items[i]);
-        select.appendChild(o);
+      parent.classList.add('mmopt-compact');
+      items.forEach((it, i) => {
+        it.classList.add('mmopt-citem');
+        const r = radios[i];
+        if (!r.__mmoptCompact) {
+          r.__mmoptCompact = true;
+          r.addEventListener('change', syncCompact);
+        }
       });
+    });
+    syncCompact();
+  }
 
-      const sync = () => {
-        const i = radios.findIndex((r) => r.checked);
-        select.value = i < 0 ? '' : String(i);
-        select.classList.toggle('mmopt-chosen', i >= 0);
-      };
-      select.addEventListener('change', () => {
-        const r = radios[Number(select.value)];
-        if (select.value !== '' && r && !r.checked) r.click(); // 本物の選択肢を押したことにする
-        sync();
-      });
-      radios.forEach((r) => r.addEventListener('change', sync));
-
-      const back = document.createElement('button');
-      back.type = 'button';
-      back.className = 'mmopt-select-back';
-      back.textContent = '一覧で選ぶ';
-      back.addEventListener('click', () => {
-        items.forEach((it) => it.classList.remove('mmopt-hidden'));
-        wrap.remove();
-      });
-
-      // 置き場所：選択肢の行と同じ種類の要素で包む（表の中なら行、リストの中なら項目）
-      const first = items[0];
-      let wrap, inner;
-      if (first.tagName === 'TR') {
-        wrap = document.createElement('tr');
-        inner = document.createElement('td');
-        inner.colSpan = 99;
-        wrap.appendChild(inner);
-      } else {
-        wrap = document.createElement(first.tagName === 'LI' ? 'li' : 'div');
-        inner = wrap;
-      }
-      wrap.classList.add('mmopt-select-wrap');
-      inner.appendChild(select);
-      inner.appendChild(back);
-      first.parentNode.insertBefore(wrap, first);
-      items.forEach((it) => it.classList.add('mmopt-hidden'));
-      sync();
+  function syncCompact() {
+    document.querySelectorAll('.mmopt-citem').forEach((it) => {
+      const r = it.querySelector('input[type="radio"]');
+      if (r) it.classList.toggle('mmopt-cchecked', r.checked);
     });
   }
 
@@ -408,7 +382,7 @@
 
   // ---------- 実行 & ページ内容の変化に追従 ----------
   function run() {
-    convertToSelects();
+    compactLongLists();
     enhanceInputs(document);
     enhanceButtons();
   }
